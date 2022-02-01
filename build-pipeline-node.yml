@@ -1,0 +1,186 @@
+# Node.js
+# Build a general Node.js project with npm.
+# Add steps that analyze code, save build artifacts, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/javascript
+
+trigger:
+  branches:
+    include:
+    - develop
+stages:
+# - stage: sonarqube
+#   jobs:
+#     - job: Job
+#       pool:
+#          name: Default
+#          demands: java
+
+#       steps:
+#       - task: SonarQubePrepare@4
+#         inputs:
+#           SonarQube: 'sonarqube connexion'
+#           scannerMode: 'CLI'
+#           configMode: 'manual'
+#           cliProjectKey: 'CXG-IT_Projects_cxapp-node-api'
+#           cliProjectName: 'cxapp-node-api'
+#           cliSources: '.'
+
+#       - bash: |
+#           if [ -f extensions.csproj ]
+#           then
+#               dotnet build extensions.csproj --output ./bin
+#           fi
+
+#         displayName: 'Build extensions'
+
+#       - task: SonarQubeAnalyze@4
+
+#       - task: SonarQubePublish@4
+#         inputs:
+#           pollingTimeoutSec: '300'
+#       - task: sonar-buildbreaker@8
+#         inputs:
+#           SonarQube: 'sonarqube connexion'
+# - stage: Tests
+#   jobs:
+#     - job: Job
+#       pool:
+#         name: Default
+#         demands: java
+
+#       steps:
+      # - task: CmdLine@2
+      #   inputs:
+      #     script: |
+      #       service_name=www
+            
+      #       pm2 describe $service_name &> /dev/null
+      #       RUNNING=$?
+            
+      #       if [ "${RUNNING}" -eq 0 ]; then
+      #         pm2 stop $service_name
+            
+      #       fi
+      
+      # - task: CmdLine@2
+      #   displayName: 'Dependencies & tests'
+      #   inputs:
+      #     script: |
+      #       npm fund
+      #       npm install
+      #       npm audit fix
+      #       pm2 start bin/www
+      #       npm run test
+      
+#       - task: PublishTestResults@2
+#         displayName: "Publish unit test result"
+#         condition: always()
+#         inputs:
+#           testResultsFormat: 'JUnit'
+#           testResultsFiles: '**/*test*.xml'
+#           testRunTitle: "Unit tests with Jest"
+#           mergeTestResults: false
+#           searchFolder: "$(Build.SourcesDirectory)"
+#           failTaskOnFailedTests: true
+
+- stage: publish_Node_CI
+  jobs:
+  - job: Job
+    pool:
+      vmImage: ubuntu-latest
+      demands:
+      - npm
+    
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '12.x'
+      displayName: 'Install Node.js'
+    - task: CmdLine@2
+      displayName: 'npm install and build our cxg_app node api'
+      inputs:
+        script: |
+          npm fund
+          npm install
+          npm audit fix
+    # - task: CmdLine@2
+    #   displayName: 'Unit tests'
+    #   inputs:
+    #     script: |
+    #       npm install mocha-junit-reporter --save-dev
+    #       npm run test
+          
+    # - task: PublishTestResults@2
+    #   inputs:
+    #     testResultsFormat: 'JUnit'
+    #     testResultsFiles: "TEST-RESULTS.xml"
+    #     failTaskOnFailedTests: false
+    # - task: PublishTestResults@2
+    #   displayName: "Publish unit test result"
+    #   condition: always()
+    #   inputs:
+    #     testResultsFormat: 'JUnit'
+    #     testResultsFiles: '**/*test*.xml'
+    #     testRunTitle: "Unit tests with Jest"
+    #     mergeTestResults: false
+    #     searchFolder: "$(Build.SourcesDirectory)"
+    #     failTaskOnFailedTests: true
+          
+    
+    - bash: |
+        # get package name from package.json file
+        echo $BUILD_NUMBER
+        packageName=$(jq -r ".name" package.json)
+        # define new package version based on
+        package_version=$(jq -r ".version" package.json)
+        #package_version=${version::-4}
+        echo package_version ${package_version}
+        get_package_id_URL="https://feeds.dev.azure.com/cxg-hub/CXG-IT Projects/_apis/packaging/Feeds/cxapp-node-api-feed/packages?protocolType=Npm&packageNameQuery=app&api-version=5.0-preview.1"
+        package_ids=$(curl -X GET -u PATUSER:$SYSTEM_ACCESSTOKEN $get_package_id_URL | jq -r '.value[].id')
+        package_arr=${package_ids}
+        package_id=${package_arr[0]}
+        echo "package_id: $package_id"
+        all_versions_URL="https://feeds.dev.azure.com/cxg-hub/CXG-IT Projects/_apis/packaging/Feeds/cxapp-node-api-feed/packages/$package_id/versions?api-version=5.0-preview.1"
+        all_versions=$(curl -X GET -u PATUSER:$SYSTEM_ACCESSTOKEN $all_versions_URL | jq -r '.value[].version')
+        all=($all_versions)
+        if [[ " ${all[@]} " =~ .*$package_version.* ]]; then
+        latest_version=$(curl -X GET -u PATUSER:$SYSTEM_ACCESSTOKEN $get_package_id_URL| jq -r '.value[].versions[].version')
+        echo latest_version ${latest_version}
+        IFS=. read i1 i2 i3 <<< "$latest_version"
+        i3_updated=$((i3 + 1))
+        new_version=$i1.$i2.$i3_updated
+        new_buildnumber=$i1.$i2.$i3_updated
+        echo new version ${new_version}
+        echo "##vso[task.setvariable variable=PatchVersion;]$i3_updated"
+        echo "##vso[task.setvariable variable=MajorVersion;]$i1"
+        echo "##vso[task.setvariable variable=MinorVersion;]$i2"
+        # update build number of the current build. let's keep things tidy
+        echo "##vso[build.updatebuildnumber]$new_buildnumber"
+        else
+        IFS=. read i1 i2 i3 <<< "$package_version"
+        echo "##vso[task.setvariable variable=PatchVersion;]$i3"
+        echo "##vso[task.setvariable variable=MajorVersion;]$i1"
+        echo "##vso[task.setvariable variable=MinorVersion;]$i2"
+        fi
+        echo new version ${new_version}
+      env:
+        BUILD_NUMBER: $(Build.BuildNumber)
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+        displayName: 'get package version'
+    - task: Npm@1
+      displayName: 'npm version'
+      inputs:
+        command: 'custom'
+        workingDir: $(Build.SourcesDirectory)
+        verbose: false
+        customCommand: 'version $(MajorVersion).$(MinorVersion).$(PatchVersion) --no-git-tag-version --allow-same-version'
+        customRegistry: 'useFeed'
+        customFeed: 'cxapp-node-api-feed'
+    - task: Npm@1
+      displayName: npm publish
+      inputs:
+        command: 'publish'
+        publishRegistry: 'useFeed'
+        publishFeed: 'CXG-IT Projects/cxapp-node-api-feed'
+        workingDir: '.'
+        verbose: true

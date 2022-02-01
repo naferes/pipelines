@@ -1,0 +1,77 @@
+# Gradle
+# Build your Java project and run tests with Gradle using a Gradle wrapper script.
+# Add steps that analyze code, save build artifacts, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/java
+
+trigger:
+- master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: Mobile
+
+steps:
+- task: NodeTool@0
+  displayName: 'Install Node'
+  inputs:
+    versionSpec: '14.15.4'
+  
+- script: npm install && npm audit fix --force
+  displayName: 'Install node dependencies'
+- script: npm install --save-dev jetifier && npx jetify && npm audit fix
+  displayName: fixing jetifier error
+- task: Gradle@2
+  inputs:
+    gradleWrapperFile: 'android/gradlew'
+    workingDirectory: 'android'
+    tasks: 'clean'
+    publishJUnitResults: false
+    javaHomeOption: 'JDKVersion'
+    options: '-PversionName=$(Build.BuildNumber) -PversionCode=$(Build.BuildId)'
+    sonarQubeRunAnalysis: false
+    spotBugsAnalysis: false
+- task: Gradle@2
+  inputs:
+    workingDirectory: 'android'
+    gradleWrapperFile: 'android/gradlew'
+    options: '-PversionName=$(Build.BuildNumber) -PversionCode=$(Build.BuildId)'
+    publishJUnitResults: false
+    testResultsFiles: '**/TEST-*.xml'
+    tasks: 'app:assembleRelease'
+
+- task: AndroidSigning@3
+  inputs:
+    apkFiles: '**/*.apk'
+    apksignerKeystoreFile: 'cxg.keystore'
+    apksignerKeystorePassword: '$(StorePassword)'
+    apksignerKeystoreAlias: '$(KeyAlias)'
+    apksignerKeyPassword: '$(KeyPassword)'
+    zipalign: false
+
+- script: mv android/app/build/outputs/apk/release/app-release.apk CXGAPP$(Build.BuildNumber).apk
+  displayName: 'Rename apk'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    pathtoPublish: CXGAPP$(Build.BuildNumber).apk
+    artifactName: drop
+    publishLocation: 'container'
+
+- task: AppCenterDistribute@3
+  displayName: "Create a release on App Center"
+  condition: 
+  inputs:
+    serverEndpoint: 'To App Center'
+    appSlug: 'CXG/CXGCONNECTAPP'
+    appFile: 'CXGAPP$(Build.BuildNumber).apk'
+    symbolsOption: 'Android'
+    releaseNotesOption: 'input'
+    releaseNotesInput: |
+      $(Build.SourceVersionMessage)
+      
+      latest source: '$(Build.SourceVersion)'
+      
+      An automated release from Azure DevOps
+    destinationType: 'groups'
